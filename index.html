@@ -92,7 +92,10 @@
   .grp h2 .n { font-weight: 700; color: var(--muted); }
   .grp h2 .sp { flex: 1; }
   .card { background: var(--card); border-radius: 18px; overflow: hidden; }
-  .item { display: flex; align-items: center; gap: 4px; padding: 0 14px 0 12px; min-height: 54px; border-top: 1px solid var(--line); }
+  .item { display: flex; align-items: center; gap: 4px; padding: 0 14px 0 12px; min-height: 54px; border-top: 1px solid var(--line); background: var(--card); position: relative; touch-action: pan-y; }
+  .item.drag { transition: none; user-select: none; -webkit-user-select: none; }
+  .item.snap { transition: transform .18s ease-out, opacity .18s; }
+  .item::before { content: '削除'; position: absolute; right: 100%; top: 0; bottom: 0; width: 100vw; display: flex; align-items: center; justify-content: flex-end; padding-right: 18px; color: #fff; font-weight: 900; background: var(--danger); }
   .item:first-child { border-top: 0; }
   .item .body { flex: 1; min-width: 0; text-align: left; background: none; border-radius: 0; padding: 9px 4px 9px 8px; font-weight: 700; display: flex; flex-direction: column; }
   .item .nm { overflow-wrap: anywhere; }
@@ -419,6 +422,7 @@ function renderList(left, done) {
   const dn = show.filter(i => i.done);
   if (dn.length) h += `<div class="grp"><h2>カゴに入れた<span class="n">${dn.length}</span><span class="sp"></span><button class="text" data-act="uncheck">チェックを外す</button></h2><ul class="card">${dn.map(row).join('')}</ul></div>`;
   if (!state.items.length) h = `<div class="empty"><b>リストは空です</b>上の入力欄か「よく買う」から追加できます。<br>「卵 2パック、牛乳、玉ねぎ×3」のようにまとめて入力もできます。</div>`;
+  if (state.items.length) h += `<p class="note" style="text-align:center;margin-top:18px">品目を右にスワイプすると削除できます</p>`;
   $('#listBody').innerHTML = h;
 }
 function renderSug() {
@@ -643,6 +647,31 @@ sheetForm.addEventListener('change', e => {
     }).catch(() => toast('このファイルは読み込めませんでした'));
   }
 });
+/* 右フリックで削除 */
+let sw = null, swiped = false;
+document.addEventListener('pointerdown', e => {
+  const li = e.target.closest('#listBody .item'); if (!li || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  sw = { li, id: li.querySelector('[data-id]').dataset.id, x: e.clientX, y: e.clientY, dx: 0, on: false, pid: e.pointerId };
+});
+document.addEventListener('pointermove', e => {
+  if (!sw || e.pointerId !== sw.pid) return;
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (!sw.on) { if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { sw = null; return; } if (dx < 12 || dx < Math.abs(dy)) return; sw.on = true; sw.li.classList.add('drag'); try { sw.li.setPointerCapture(e.pointerId); } catch (x) {} }
+  sw.dx = Math.max(0, dx); sw.li.style.transform = `translateX(${sw.dx}px)`;
+});
+function swEnd(cancel) {
+  if (!sw) return; const { li, id, dx, on } = sw; sw = null; if (!on) return;
+  swiped = true; setTimeout(() => { swiped = false; }, 50);
+  li.classList.remove('drag'); li.classList.add('snap');
+  if (!cancel && dx > Math.min(110, li.offsetWidth * 0.3)) {
+    li.style.transform = `translateX(${li.offsetWidth}px)`; li.style.opacity = '0';
+    setTimeout(() => { const it = state.items.find(i => i.id === id); if (!it) return render(); snap(); state.items = state.items.filter(i => i.id !== id); commit(`${it.name} を削除しました`, true); }, 170);
+  } else { li.style.transform = ''; setTimeout(() => li.classList.remove('snap'), 200); }
+}
+document.addEventListener('pointerup', () => swEnd(false));
+document.addEventListener('pointercancel', () => swEnd(true));
+document.addEventListener('click', e => { if (swiped) { e.stopPropagation(); e.preventDefault(); } }, true);
+
 addEventListener('storage', e => { if (e.key === KEY) { state = load(); applyTheme(); render(); } });
 
 applyTheme(); render(); receiveLink();
