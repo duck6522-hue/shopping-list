@@ -162,6 +162,16 @@
   .seg .pick { flex: 1; }
   .seg .pick span { background: none; text-align: center; border-radius: 11px; padding: 8px 4px; }
   .note { color: var(--muted); font-size: 12px; }
+  textarea { resize: vertical; line-height: 1.5; }
+  .impbox { background: var(--field); border-radius: 14px; max-height: 34dvh; overflow: auto; padding: 2px 12px; }
+  .imp { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--line); color: var(--text); font-size: 15px; }
+  .imp:first-child { border-top: 0; }
+  .imp .nm { flex: 1; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+  .imp small { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .imp em { font-style: normal; font-size: 11px; font-weight: 900; color: var(--pt); background: var(--tint); padding: 1px 8px; border-radius: 10px; white-space: nowrap; }
+  .chk { flex-direction: row !important; align-items: flex-start; gap: 10px !important; font-weight: 400 !important; font-size: 13px !important; line-height: 1.4; }
+  .chk input { margin-top: 1px; }
+  #impSum { font-size: 13px; font-weight: 700; color: var(--pt); }
 </style>
 </head>
 <body>
@@ -186,6 +196,7 @@
       <input type="text" id="addInput" placeholder="買うものを追加（例：卵 2パック）" enterkeyhint="done" aria-label="買うものを追加">
       <button class="primary" aria-label="追加">＋</button>
     </form>
+    <button class="text" data-act="import-text" style="margin-top:6px">📋 文章から取り込む（AIのリストなど）</button>
     <div id="sug"></div>
     <div id="storeFilter"></div>
     <div id="listBody"></div>
@@ -359,6 +370,115 @@ function parseEntry(raw) {
   let m = s.match(/^(.+?)\s*[x×✕]\s*(\d+(?:\.\d+)?)\s*([^\d\s]{0,4})$/i) || s.match(/^(.+?)\s+(\d+(?:\.\d+)?)\s*([^\d\s]{0,4})$/) || s.match(new RegExp('^(.+?)(\\d+(?:\\.\\d+)?)(' + UNITS.join('|') + ')$'));
   if (m && +m[2] > 0) return { name: m[1].trim(), qty: +m[2], unit: m[3] || '' };
   return { name: s, qty: 0, unit: '' };
+}
+/* ---------- 文章から取り込む ---------- */
+const HEAD = [
+  ['veg', /^(野菜|果物|青果|野菜・果物|野菜果物|野菜と果物)$/],
+  ['meat', /^(肉|魚|肉・魚|肉魚|肉類|魚介|魚介類|精肉|鮮魚|精肉・鮮魚|肉・魚介)$/],
+  ['dairy', /^(乳製品|卵・乳製品|卵・乳製品・豆腐|卵乳製品|チルド|チルド食品|卵・豆腐)$/],
+  ['staple', /^(米・麺・パン|主食|麺類|パン類|乾麺|米・パン|ごはん・麺)$/],
+  ['pantry', /^(レトルト|缶詰|乾物|レトルト・缶詰・乾物|缶詰・乾物|保存食|レトルト食品)$/],
+  ['season', /^(調味料|調味料類|調味料・油)$/],
+  ['snack', /^(お菓子|おやつ|スイーツ|菓子)$/],
+  ['drink', /^(飲み物|飲料|ドリンク|飲料・酒)$/],
+  ['frozen', /^(冷凍|冷凍食品|冷凍・アイス|アイス|冷凍品)$/],
+  ['daily', /^(日用品|雑貨|生活用品|日用雑貨|消耗品)$/],
+  ['other', /^(その他|他|そのほか)$/],
+];
+const headCat = t => {
+  const x = String(t).normalize('NFKC').replace(/[\s■□▼▲◆◇▶●○★☆【】\[\]「」『』*#_`:-]/g, '').replace(/(売り場|コーナー)$/, '');
+  for (const [c, re] of HEAD) if (re.test(x)) return c;
+  return '';
+};
+function parseText(text) {
+  const out = [], seen = new Set(); let ctx = '';
+  for (const line of String(text).replace(/\r/g, '').split('\n')) {
+    let s = line.normalize('NFKC').trim(); if (!s) continue;
+    const hm = s.match(/^#{1,6}\s*(.+)$/) || s.match(/^\*\*(.+?)\*\*:?$/) || s.match(/^__(.+?)__:?$/) || s.match(/^[【\[](.+?)[】\]]:?$/) || s.match(/^[■▼▲◆◇▶●★☆]+\s*(.+)$/);
+    if (hm) { ctx = headCat(hm[1]); continue; }
+    let bullet = false, checked = false;
+    for (;;) {
+      const m = s.match(/^(?:[-*+•・○◦▪▫□☐☑✅✔▢→]|\d+[.)](?=\s|$)|\[[ xX]?\]|\([ xX]\))\s*/);
+      if (!m) break; bullet = true; if (/[xX☑✅✔]/.test(m[0])) checked = true; s = s.slice(m[0].length);
+    }
+    if (!s) continue;
+    if (!bullet) {
+      const m = s.match(/^(.{1,14}?)\s*:\s*(.*)$/);
+      if (m) { const hc = headCat(m[1]); if (hc) { ctx = hc; s = m[2].trim(); if (!s) continue; } else if (!m[2].trim()) { ctx = ''; continue; } }
+      else if (headCat(s)) { ctx = headCat(s); continue; }
+    }
+    if (/[。！？!?]|ください|ましょう|ます$|です$/.test(s) || (s.length > 40 && !/[、,]/.test(s))) continue;
+    s = s.replace(/\*\*|__|`/g, '').replace(/[¥]\s*[\d,]+(?:\s*(?:円|前後|くらい|程度))?|約?\s*[\d,]+\s*円/g, ' ')
+      .replace(/約\s*(?=\d)/g, '').replace(/(?:大さじ|小さじ)\s*[\d./]*|ひとつまみ|少々|適量/g, ' ')
+      .replace(/(\d+)\/(\d+)/g, (m, a, b) => +b ? String(+(a / b).toFixed(2)) : m).trim();
+    for (let part of s.split(/[、,](?![^(]*\))/)) {
+      part = part.trim(); if (!part) continue;
+      let memo = '';
+      part = part.replace(/\s*\(([^)]*)\)\s*/g, (m, t) => { memo = memo ? memo + '・' + t : t; return ' '; }).trim()
+        .replace(/\s*(?::|\s[-–—]\s)\s*(?=\d)/, ' ').replace(/(?:など|ほか)$/, '').trim();
+      if (!part) continue;
+      const e = parseEntry(part);
+      const name = e.name.replace(/^[\s・:\-]+|[\s:\-、,.]+$/g, '').replace(/\s*(?:約|くらい|程度)$/, '').trim().slice(0, 40);
+      if (!name || name.length > 30 || /^[\d\s.,:;\-–—~!@#$%^&*()+=]*$/.test(name)) continue;
+      const k = norm(name); if (seen.has(k)) continue; seen.add(k);
+      out.push({ name, qty: e.qty, unit: e.unit, memo: memo.slice(0, 40), cat: ctx, skip: checked });
+    }
+  }
+  return out;
+}
+function applyParsed(list, replace) {
+  let added = 0, updated = 0, removed = 0;
+  const keep = new Set(list.map(p => norm(p.name)));
+  for (const p of list) {
+    const ex = findItem(p.name);
+    if (ex && !ex.done) {
+      if (p.qty) { ex.qty = p.qty; if (p.unit) ex.unit = p.unit; }
+      if (p.memo && !ex.memo) ex.memo = p.memo;
+      updated++; continue;
+    }
+    const known = Object.keys(state.memory).some(k => norm(k) === norm(p.name));
+    const r = addItem({ name: p.name, qty: p.qty, unit: p.unit }, false);
+    if (!r) continue;
+    added++;
+    if (r.how === 'new') { if (p.memo) r.it.memo = p.memo; if (p.cat && !known) { r.it.cat = p.cat; memOf(r.it.name).cat = p.cat; } }
+  }
+  if (replace) { const n = state.items.length; state.items = state.items.filter(i => i.done || keep.has(norm(i.name))); removed = n - state.items.length; }
+  return { added, updated, removed };
+}
+function importSheet(initial = '') {
+  let parsed = [], sel = new Set();
+  const chosen = () => [...sel].sort((a, b) => a - b).map(i => parsed[i]);
+  const summary = () => {
+    const list = chosen(), form = sheetForm.elements, rep = form.replace && form.replace.checked;
+    const upd = list.filter(p => { const ex = findItem(p.name); return ex && !ex.done; }).length;
+    const rem = rep ? state.items.filter(i => !i.done && !list.some(p => norm(p.name) === norm(i.name))).length : 0;
+    $('#impSum').textContent = parsed.length ? `${list.length}点を取り込みます（新規${list.length - upd}・更新${upd}${rep ? `・削除${rem}` : ''}）` : '';
+    const b = $('#impBtn'); b.disabled = !list.length; b.style.opacity = list.length ? '' : '.5';
+  };
+  const rows = () => {
+    parsed = parseText(sheetForm.elements.text.value); sel = new Set(parsed.map((p, i) => p.skip ? -1 : i).filter(i => i >= 0));
+    $('#impPrev').innerHTML = parsed.length ? `<div class="impbox">${parsed.map((p, i) => {
+      const ex = findItem(p.name), q = fmtQty({ qty: p.qty || 1, unit: p.unit }), c = p.cat || guessCat(p.name);
+      return `<label class="imp"><input type="checkbox" data-imp="${i}" ${sel.has(i) ? 'checked' : ''}><span class="nm">${esc(p.name)}</span>${p.qty ? `<small>${esc(q)}</small>` : ''}${ex && !ex.done ? '<em>リストにあり</em>' : `<small aria-hidden="true">${emo(p.name, c)}</small>`}</label>`;
+    }).join('')}</div>` : (sheetForm.elements.text.value.trim() ? '<p class="note">読み取れる品目がありません。</p>' : '');
+    summary();
+  };
+  openSheet(`<h2>文章から取り込む<button type="button" class="text" data-act="close">閉じる</button></h2>
+    <p class="note">AI（ChatGPT・Claude など）が作ったリストや、LINE・メモの文章を貼り付けてください。箇条書き・番号・「【野菜】」などの見出し・「卵 10個」のような数量を読み取り、売り場も見出しから振り分けます。</p>
+    <textarea name="text" rows="6" placeholder="例）&#10;【野菜】&#10;・玉ねぎ 3個&#10;・にんじん 2本&#10;【肉・魚】&#10;・鶏むね肉 600g"></textarea>
+    <div id="impPrev"></div>
+    <label class="f chk"><input type="checkbox" name="replace"><span>リストを文章に合わせる（文章にない未チェックの品目は削除。あとで元に戻せます）</span></label>
+    <div id="impSum" role="status"></div>
+    <button class="primary wide" id="impBtn" disabled style="opacity:.5">取り込む</button>`, {
+    input(e) { if (e.target.name === 'text') rows(); },
+    change(e) { if (e.target.dataset.imp !== undefined) { const i = +e.target.dataset.imp; e.target.checked ? sel.add(i) : sel.delete(i); summary(); } else if (e.target.name === 'replace') summary(); },
+    submit(fd) {
+      const list = chosen(); if (!list.length) return;
+      snap(); const r = applyParsed(list, !!fd.get('replace')); view = 'list';
+      closeSheet(); commit(`${r.added}点を追加${r.updated ? `・${r.updated}点を更新` : ''}${r.removed ? `・${r.removed}点を削除` : ''}しました`, true);
+    }
+  });
+  if (initial) { sheetForm.elements.text.value = initial; rows(); } else sheetForm.elements.text.focus();
 }
 const fmtQty = i => i.unit ? `${i.qty}${i.unit}` : (i.qty > 1 ? `×${i.qty}` : '');
 function memOf(name) { return state.memory[name] || (state.memory[name] = { cat: guessCat(name), unit: '', store: '', n: 0, dates: [], seed: 0 }); }
@@ -605,6 +725,7 @@ $('#addForm').addEventListener('submit', e => {
   inp.focus();
 });
 $('#addInput').addEventListener('input', renderSug);
+$('#addInput').addEventListener('paste', e => { const t = (e.clipboardData || window.clipboardData)?.getData('text') || ''; if (/\n/.test(t.trim())) { e.preventDefault(); importSheet(t); } });
 $('#memSearch').addEventListener('input', renderMemory);
 
 document.addEventListener('click', e => {
@@ -623,6 +744,7 @@ document.addEventListener('click', e => {
   else if (a === 'hadd') { const t = el.closest('.trip'); const r = addItem({ name: d.name, qty: 0, unit: '' }, false); commit(r.how === 'same' ? `${d.name} はもうリストにあります` : `${d.name} を追加しました`); }
   else if (a === 'hall') { const t = state.trips.find(t => t.id === d.id); if (t) { snap(); t.items.forEach(i => addItem({ name: i.name, qty: i.qty, unit: i.unit }, false)); commit(`${t.items.length}点をリストに追加しました`, true); } }
   else if (a === 'hdel') { snap(); state.trips = state.trips.filter(t => t.id !== d.id); commit('履歴を1件削除しました', true); }
+  else if (a === 'import-text') importSheet();
   else if (a === 'settings') settingsSheet();
   else if (a === 'close') closeSheet();
   else if (a === 'step') { const q = sheetForm.elements.qty; q.value = Math.max(1, Math.round(((+q.value || 1) + +d.d) * 100) / 100); }
@@ -637,7 +759,9 @@ document.addEventListener('click', e => {
   else if (a === 'reset') openSheet(`<h2>すべて消しますか？</h2><p class="note">この端末のリスト・よく買う・履歴（${state.trips.length}回分）を消して、最初の状態に戻します。</p><div class="acts"><button type="button" data-act="settings">やめる</button><button class="primary wide" style="background:var(--danger)">すべて消す</button></div>`, {
     submit() { snap(); state = fresh(); applyTheme(); closeSheet(); commit('最初の状態に戻しました', true); } });
 });
+sheetForm.addEventListener('input', e => { if (sheetCtx && sheetCtx.input) sheetCtx.input(e); });
 sheetForm.addEventListener('change', e => {
+  if (sheetCtx && sheetCtx.change) sheetCtx.change(e);
   if (e.target.name === 'theme') { state.theme = e.target.value; applyTheme(); save(); }
   if (e.target.id === 'importFile' && e.target.files[0]) {
     e.target.files[0].text().then(t => {
